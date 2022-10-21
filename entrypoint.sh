@@ -1,7 +1,7 @@
-#!/bin/sh
+#! /bin/sh
 
-set -eu pipefail
+set -eu
 
 : "${SCW_SECRET_KEY?SCW_SECRET_KEY environment variable must be set}"
 
-python ./scw_registry_cleaner/cli.py "$@"
+exec python ./scw_registry_cleaner/cli.py "$@"
