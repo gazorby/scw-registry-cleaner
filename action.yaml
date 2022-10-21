@@ -1,0 +1,9 @@
+name: Scaleway registry cleaner
+description: Clean old images from scaleway registry
+author: Drinn
+runs:
+  using: docker
+  image: Dockerfile
+branding:
+  icon: folder
+  color: purple
