@@ -10,7 +10,7 @@ from scw_registry_cleaner.api import RegistryAPI
 
 logger = logging.getLogger(__name__)
 
-parser = argparse.ArgumentParser(description="Delete old images from scaleway registry")
+parser = argparse.ArgumentParser(description="Delete old tags from scaleway registry")
 
 parser.add_argument(
     "-n",
