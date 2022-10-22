@@ -12,6 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY scw_registry_cleaner scw_registry_cleaner
 COPY entrypoint.sh .
 
-ENTRYPOINT [ "./entrypoint.sh" ]
+ENTRYPOINT [ "/app/entrypoint.sh" ]
 
 CMD [ "--help" ]
