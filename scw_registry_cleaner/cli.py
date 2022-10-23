@@ -21,11 +21,38 @@ parser.add_argument(
     default=[],
     required=True,
 )
-parser.add_argument("-k", "--keep", metavar="NUMBER", type=int, nargs=1)
-parser.add_argument("-g", "--grace", metavar="DURATION", nargs=1)
-parser.add_argument("-p", "--pattern", metavar="REGEX", nargs=1, default=None)
-parser.add_argument("--dry-run", action="store_true")
-parser.add_argument("--debug", action="store_true")
+parser.add_argument(
+    "-k",
+    "--keep",
+    metavar="NUMBER",
+    type=int,
+    nargs=1,
+    help="Ensure there is at least 5 remaining tags from selected ones after deletion",
+)
+parser.add_argument(
+    "-g",
+    "--grace",
+    metavar="DURATION",
+    nargs=1,
+
+    help="Delete any selected tags older than the specified duration (in hours, minutes or seconds). Valid examples: '48hr', '3600s', '24hr30m'",
+)
+parser.add_argument(
+    "-p",
+    "--pattern",
+    metavar="REGEX",
+    nargs=1,
+    default=None,
+    help="Filter tags for that can be selected for deletion. Any tag not matching the pattern will not be deleted",
+)
+parser.add_argument(
+    "--dry-run",
+    action="store_true",
+    help="Do not delete anything and print image names that would be deleted",
+)
+parser.add_argument(
+    "--debug", action="store_true", help="Print responses from scaleway registry API"
+)
 
 Tag = namedtuple("Tag", ["id", "name", "created_at", "full_name"])
 
