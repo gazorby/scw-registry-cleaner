@@ -4,7 +4,7 @@ import logging
 import os
 import re
 from collections import defaultdict, namedtuple
-from typing import List
+from typing import Dict, List
 
 from scw_registry_cleaner.api import RegistryAPI
 
@@ -63,7 +63,8 @@ if __name__ == "__main__":
 
     api = RegistryAPI(auth_token=api_token, debug=args.debug)
 
-    selected_tags = defaultdict(list)
+    selected_tags: Dict[str, List[Tag]] = defaultdict(list)
+    tags_to_delete: Dict[str, List[Tag]] = defaultdict(list)
 
     for n in namespaces:
         resp = api.get_namespace(name=n)
@@ -91,13 +92,17 @@ if __name__ == "__main__":
             continue
         if grace:
             now = dt.datetime.now()
-            tags = [t for t in tags if now - t.created_at >= grace]
-            selected_tags[image] = tags
+            count = 0
+            to_delete: List[Tag] = []
+            for t in tags:
+                if now - t.created_at >= grace and len(tags) - len(to_delete) >= keep:
+                    to_delete.append(t)
+            tags_to_delete[image] = to_delete
 
     if dry_run:
         print("\nTags to delete:\n")
 
-    for name, tags in selected_tags.items():
+    for name, tags in tags_to_delete.items():
         if not tags:
             continue
         if dry_run:
