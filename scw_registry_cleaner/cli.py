@@ -25,6 +25,7 @@ parser.add_argument("-k", "--keep", metavar="NUMBER", type=int, nargs=1)
 parser.add_argument("-g", "--grace", metavar="DURATION", nargs=1)
 parser.add_argument("-p", "--pattern", metavar="REGEX", nargs=1, default=None)
 parser.add_argument("--dry-run", action="store_true")
+parser.add_argument("--debug", action="store_true")
 
 Tag = namedtuple("Tag", ["id", "name", "created_at", "full_name"])
 
@@ -46,7 +47,10 @@ if __name__ == "__main__":
         keep = float("-inf")
 
     if grace:
-        parts = re.match(r'((?P<hours>\d+?)hr)?((?P<minutes>\d+?)m)?((?P<seconds>\d+?)s)?', args.grace[0])
+        parts = re.match(
+            r"((?P<hours>\d+?)hr)?((?P<minutes>\d+?)m)?((?P<seconds>\d+?)s)?",
+            args.grace[0],
+        )
         parts = parts.groupdict()
         time_params = {}
         for name, param in parts.items():
@@ -54,11 +58,10 @@ if __name__ == "__main__":
                 time_params[name] = int(param)
         grace = dt.timedelta(**time_params)
 
-
     if args.pattern is not None:
         pattern = re.compile(args.pattern[0])
 
-    api = RegistryAPI(auth_token=api_token)
+    api = RegistryAPI(auth_token=api_token, debug=args.debug)
 
     selected_tags = defaultdict(list)
 
@@ -69,9 +72,16 @@ if __name__ == "__main__":
         for image in images:
             tags = api.get_image_tags(image["id"])
             for t in tags:
-                created_at_dt = dt.datetime.fromisoformat(t["created_at"].replace("Z", ""))
+                created_at_dt = dt.datetime.fromisoformat(
+                    t["created_at"].replace("Z", "")
+                )
                 if pattern is None or pattern.match(t["name"]):
-                    tag = Tag(id=t["id"], name=t["name"], created_at=created_at_dt, full_name=f"{n}/{image['name']}:{t['name']}")
+                    tag = Tag(
+                        id=t["id"],
+                        name=t["name"],
+                        created_at=created_at_dt,
+                        full_name=f"{n}/{image['name']}:{t['name']}",
+                    )
                     selected_tags[image["name"]].append(tag)
 
     for image, tags in selected_tags.items():
@@ -81,7 +91,7 @@ if __name__ == "__main__":
             continue
         if grace:
             now = dt.datetime.now()
-            tags = [t for t in tags if now - t.created_at >= grace ]
+            tags = [t for t in tags if now - t.created_at >= grace]
             selected_tags[image] = tags
 
     if dry_run:

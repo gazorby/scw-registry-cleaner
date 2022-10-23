@@ -1,19 +1,21 @@
 import logging
 import platform
+import pprint
 import sys
 import time
 from logging import NullHandler
 from typing import Optional
+
 import requests
 from requests.adapters import HTTPAdapter
 from requests.exceptions import HTTPError
+
+import scw_registry_cleaner
 
 # Prevent message "No handlers could be found for logger "scaleway"" to be
 # displayed.
 logger = logging.getLogger(__name__)
 logger.addHandler(NullHandler())
-
-__version__ = "0.1.0"
 
 REGIONS = {
     "fr-par": {
@@ -27,26 +29,36 @@ REGIONS = {
     },
 }
 
-class MaintenanceAdapter(HTTPAdapter):
+
+class CustomAdapter(HTTPAdapter):
     # Maximum number of times we try to make a request against an API in
     # maintenance before aborting.
     MAX_RETRIES = 3
 
+    def __init__(self, debug: bool, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.logging = debug
+
     def retry_in(self, retry):
-        """ If the API returns a maintenance HTTP status code, sleep a while
+        """If the API returns a maintenance HTTP status code, sleep a while
         before retrying.
         """
-        return min(2 ** retry, 30)
+        return min(2**retry, 30)
 
-    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None) -> requests.Response:
-        """ Makes a request to the Scaleway API, and wait patiently if there is
+    def send(
+        self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None
+    ) -> requests.Response:
+        """Makes a request to the Scaleway API, and wait patiently if there is
         an ongoing maintenance.
         """
         retry = 0
 
         while True:
             try:
-                return super().send(request, stream, timeout, verify, cert, proxies)
+                resp = super().send(request, stream, timeout, verify, cert, proxies)
+                if self.logging:
+                    pprint.pprint(resp.json())
+                return resp
             except HTTPError as exc:
                 # Not a maintenance exception
                 if exc.response.status_code not in (502, 503, 504):
@@ -76,7 +88,7 @@ class RegistryAPI:
 
     base_url = None
     user_agent = "scw-sdk/%s Python/%s %s" % (
-        __version__,
+        scw_registry_cleaner.__version__,
         " ".join(sys.version.split()),
         platform.platform(),
     )
@@ -89,6 +101,7 @@ class RegistryAPI:
         verify_ssl: bool = True,
         region: Optional[str] = None,
         base_url: Optional[str] = None,
+        debug: bool = False,
     ):
         if base_url:
             self.base_url = base_url
@@ -110,9 +123,9 @@ class RegistryAPI:
         self.verify_ssl = verify_ssl
 
         self.base_url = REGIONS.get(self.region)["url"]
-        self.session = self.make_requests_session()
+        self.session = self.make_requests_session(debug)
 
-    def make_requests_session(self):
+    def make_requests_session(self, logging: bool):
         """Attaches headers needed to query Scaleway APIs."""
         session = requests.Session()
 
@@ -125,7 +138,7 @@ class RegistryAPI:
             session.headers.update({"X-Session-Token": self.auth_jwt.encode("latin1")})
 
         session.verify = self.verify_ssl
-        session.mount("https://", MaintenanceAdapter())
+        session.mount("https://", CustomAdapter(debug=logging))
 
         return session
 
