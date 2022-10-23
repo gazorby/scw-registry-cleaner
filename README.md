@@ -8,7 +8,7 @@ Clean old docker images from scaleway registry
     runs-on: ubuntu-latest
     steps:
       - name: Clean old tags
-        uses: gazorby/scw-registry-cleaner@v0.1.0
+        uses: gazorby/scw-registry-cleaner@v0.2.0
         env:
           SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
         with:
