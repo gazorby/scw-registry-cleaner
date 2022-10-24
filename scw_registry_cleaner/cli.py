@@ -28,6 +28,7 @@ parser.add_argument(
     type=int,
     nargs=1,
     help="Ensure there is at least 5 remaining tags from selected ones after deletion",
+    default=None
 )
 parser.add_argument(
     "-g",
@@ -70,8 +71,10 @@ if __name__ == "__main__":
     pattern = args.pattern
     dry_run: bool = args.dry_run
 
-    if keep is None:
+    if args.keep is None:
         keep = float("-inf")
+    else:
+        keep = args.keep[0]
 
     if grace:
         parts = re.match(
@@ -85,8 +88,8 @@ if __name__ == "__main__":
                 time_params[name] = int(param)
         grace = dt.timedelta(**time_params)
 
-    if args.pattern is not None:
-        pattern = re.compile(args.pattern[0])
+    if pattern is not None:
+        pattern = re.compile(pattern[0])
 
     api = RegistryAPI(auth_token=api_token, debug=args.debug)
 
@@ -117,14 +120,16 @@ if __name__ == "__main__":
 
         if len(tags) <= keep:
             continue
-        if grace:
-            now = dt.datetime.now()
-            count = 0
-            to_delete: List[Tag] = []
-            for t in tags:
-                if now - t.created_at >= grace and len(tags) - len(to_delete) >= keep:
-                    to_delete.append(t)
-            tags_to_delete[image] = to_delete
+        to_delete: List[Tag] = []
+        now = dt.datetime.now()
+        for t in tags:
+            too_old = False
+            if grace:
+                too_old = now - t.created_at >= grace
+            if too_old or len(tags) - len(to_delete) >= keep:
+                to_delete.append(t)
+        tags_to_delete[image] = to_delete
+
 
     if dry_run:
         print("\nTags to delete:\n")
