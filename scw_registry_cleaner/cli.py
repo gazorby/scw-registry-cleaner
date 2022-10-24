@@ -27,7 +27,7 @@ parser.add_argument(
     metavar="NUMBER",
     type=int,
     nargs=1,
-    help="Ensure there is at least 5 remaining tags from selected ones after deletion",
+    help="Minimum tags to keep outside of the grace duration",
     default=None
 )
 parser.add_argument(
@@ -117,16 +117,15 @@ if __name__ == "__main__":
 
     for image, tags in selected_tags.items():
         tags.sort(key=lambda item: item.created_at)
-
-        if len(tags) <= keep:
-            continue
-        to_delete: List[Tag] = []
+        to_delete, old_tags = [], []
         now = dt.datetime.now()
         for t in tags:
             too_old = False
             if grace:
                 too_old = now - t.created_at >= grace
-            if too_old or len(tags) - len(to_delete) >= keep:
+            if too_old:
+                old_tags.append(t)
+            if too_old and len(old_tags) - len(to_delete) >= keep:
                 to_delete.append(t)
         tags_to_delete[image] = to_delete
 
