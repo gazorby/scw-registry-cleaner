@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser(description="Delete old tags from scaleway registry")
 
 parser.add_argument(
+    "--scw-secret-key",
+    metavar="SECRET",
+    nargs=1,
+    help="Scaleway secret key to authenticate the registry",
+    default=None,
+)
+parser.add_argument(
     "-n",
     "--namespace",
     metavar="NAMESPACE",
@@ -28,14 +35,13 @@ parser.add_argument(
     type=int,
     nargs=1,
     help="Minimum tags to keep outside of the grace duration",
-    default=None
+    default=None,
 )
 parser.add_argument(
     "-g",
     "--grace",
     metavar="DURATION",
     nargs=1,
-
     help="Delete any selected tags older than the specified duration (in hours, minutes or seconds). Valid examples: '48hr', '3600s', '24hr30m'",
 )
 parser.add_argument(
@@ -63,13 +69,15 @@ if __name__ == "__main__":
     region = os.getenv("SCW_REGION", None)
 
     # Parse args
-
     args = parser.parse_args()
     namespaces: List[str] = args.namespace[0]
     keep = args.keep
     grace = args.grace
     pattern = args.pattern
     dry_run: bool = args.dry_run
+
+    if args.scw_secret_key is not None:
+        api_token = args.scw_secret_key[0]
 
     if args.keep is None:
         keep = float("-inf")
@@ -128,7 +136,6 @@ if __name__ == "__main__":
             if too_old and len(old_tags) - len(to_delete) >= keep:
                 to_delete.append(t)
         tags_to_delete[image] = to_delete
-
 
     if dry_run:
         print("\nTags to delete:\n")
