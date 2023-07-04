@@ -1,21 +1,48 @@
+from __future__ import annotations
+
 import logging
 import platform
 import pprint
+import re
 import sys
-import time
-from logging import NullHandler
-from typing import Optional
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from enum import Enum
+from itertools import islice
+from logging import StreamHandler
+from typing import TYPE_CHECKING, Optional, TypeVar
 
-import requests
-from requests.adapters import HTTPAdapter
-from requests.exceptions import HTTPError
+import anyio
+from anyio import Lock, create_task_group
+from httpx import (
+    AsyncClient,
+    AsyncHTTPTransport,
+    HTTPStatusError,
+    Request,
+    Response,
+    Timeout,
+)
 
 import scw_registry_cleaner
 
+if TYPE_CHECKING:
+    from typing import Any, Generator, Iterable, Pattern
+
 # Prevent message "No handlers could be found for logger "scaleway"" to be
 # displayed.
+
+BatchedT = TypeVar("BatchedT")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s",
+    handlers=[StreamHandler(stream=sys.stdout)],
+)
+# Filter out httpx logging
+httpx_logger = logging.getLogger("httpx")
+httpx_logger.setLevel(logging.WARN)
 logger = logging.getLogger(__name__)
-logger.addHandler(NullHandler())
 
 REGIONS = {
     "fr-par": {
@@ -30,7 +57,36 @@ REGIONS = {
 }
 
 
-class CustomAdapter(HTTPAdapter):
+def batched(
+    iterable: Iterable[BatchedT], n: int
+) -> Generator[tuple[BatchedT], Any, None]:
+    "Batch data into tuples of length n. The last batch may be shorter."
+    # batched('ABCDEFG', 3) --> ABC DEF G
+    if n < 1:
+        raise ValueError("n must be at least one")
+    it = iter(iterable)
+    while batch := tuple(islice(it, n)):
+        yield batch
+
+
+class TagStatus(Enum):
+    UNKNOWN = "unknown"
+    READY = "ready"
+    DELETING = "deleting"
+    ERROR = "error"
+    LOCKED = "locked"
+
+
+@dataclass(frozen=True)
+class Tag:
+    id: str
+    name: str
+    created_at: datetime
+    full_name: str
+    status: TagStatus
+
+
+class CustomTransport(AsyncHTTPTransport):
     # Maximum number of times we try to make a request against an API in
     # maintenance before aborting.
     MAX_RETRIES = 3
@@ -45,21 +101,16 @@ class CustomAdapter(HTTPAdapter):
         """
         return min(2**retry, 30)
 
-    def send(
-        self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None
-    ) -> requests.Response:
-        """Makes a request to the Scaleway API, and wait patiently if there is
-        an ongoing maintenance.
-        """
+    async def handle_async_request(self, request: Request) -> Response:
         retry = 0
 
         while True:
             try:
-                resp = super().send(request, stream, timeout, verify, cert, proxies)
+                resp = await super().handle_async_request(request)
                 if self.logging:
                     pprint.pprint(resp.json())
                 return resp
-            except HTTPError as exc:
+            except HTTPStatusError as exc:
                 # Not a maintenance exception
                 if exc.response.status_code not in (502, 503, 504):
                     raise
@@ -76,9 +127,9 @@ class CustomAdapter(HTTPAdapter):
 
                 logger.info(
                     f"API endpoint is currently in maintenance. Try again in "
-                    f"{retry_in} seconds... (retry {retry} on {self.max_retries})"
+                    f"{retry_in} seconds... (retry {retry} on {self.MAX_RETRIES})"
                 )
-                time.sleep(retry_in)
+                await anyio.sleep(retry_in)
 
 
 class RegistryAPI:
@@ -122,41 +173,135 @@ class RegistryAPI:
 
         self.verify_ssl = verify_ssl
 
-        self.base_url = REGIONS.get(self.region)["url"]
-        self.session = self.make_requests_session(debug)
+        self.base_url = REGIONS[self.region]["url"]
+        self._read_timout: float = 20.0
+        self.client = self.make_client(debug)
 
-    def make_requests_session(self, logging: bool):
+    def make_client(self, logging: bool) -> AsyncClient:
         """Attaches headers needed to query Scaleway APIs."""
-        session = requests.Session()
+        client = AsyncClient(
+            mounts={"https://": CustomTransport(debug=logging)},
+            timeout=Timeout(5.0, read=self._read_timout),
+        )
 
-        session.headers.update({"User-Agent": self.user_agent})
+        client.headers.update({"User-Agent": self.user_agent})
 
         if self.auth_token:
-            # HTTP headers must always be ISO-8859-1 encoded
-            session.headers.update({"X-Auth-Token": self.auth_token.encode("latin1")})
+            client.headers.update({"X-Auth-Token": self.auth_token})
         if self.auth_jwt:
-            session.headers.update({"X-Session-Token": self.auth_jwt.encode("latin1")})
+            client.headers.update({"X-Session-Token": self.auth_jwt})
 
-        session.verify = self.verify_ssl
-        session.mount("https://", CustomAdapter(debug=logging))
+        return client
 
-        return session
+    @classmethod
+    def to_tag(cls, namespace: str, image: dict, data: dict) -> Tag:
+        created_at_dt = datetime.fromisoformat(data["created_at"].replace("Z", ""))
+        return Tag(
+            id=data["id"],
+            name=data["name"],
+            created_at=created_at_dt,
+            full_name=f"{namespace}/{image['name']}:{data['name']}",
+            status=TagStatus(data["status"]),
+        )
 
-    def get_namespace(self, name: Optional[str] = None) -> dict:
-        resp = self.session.get(f"{self.base_url}/namespaces", params={"name": name})
+    async def _task_filter_tags(
+        self,
+        lock: Lock,
+        shared_tags: dict[str, list[Tag]],
+        namespace: str,
+        image: dict,
+        pattern: Pattern,
+    ) -> None:
+        tags = await self.get_image_tags(image["id"])
+        for t in tags:
+            if pattern is None or pattern.match(t["name"]):
+                tag = self.to_tag(namespace, image, t)
+                async with lock:
+                    shared_tags[image["name"]].append(tag)
+
+    async def get_namespace(self, name: Optional[str] = None) -> dict:
+        resp = await self.client.get(
+            f"{self.base_url}/namespaces", params={"name": name}
+        )
         return resp.json()["namespaces"]
 
-    def get_images(self, namespace_id: str, name: Optional[str] = None) -> dict:
+    async def get_images(self, namespace_id: str, name: Optional[str] = None) -> dict:
         params = {"namespace_id": namespace_id}
         if name:
             params["name"] = name
-        resp = self.session.get(f"{self.base_url}/images", params=params)
+        resp = await self.client.get(f"{self.base_url}/images", params=params)
         return resp.json()["images"]
 
-    def get_image_tags(self, image_id: str) -> dict:
-        resp = self.session.get(f"{self.base_url}/images/{image_id}/tags")
-        return resp.json()["tags"]
+    async def get_image_tags(self, image_id: str, max_pages: int = 20) -> list:
+        page: int = 1
+        tags: list[Tag] = []
+        while page < max_pages:
+            resp = await self.client.get(
+                f"{self.base_url}/images/{image_id}/tags",
+                params={"page_size": 100, "page": page},
+            )
+            data = resp.json()
+            page += 1
+            tags.extend(data["tags"])
+        return tags
 
-    def delete_tag(self, id: str) -> dict:
-        resp = self.session.delete(f"{self.base_url}/tags/{id}")
+    async def filter_namespace_tags(
+        self, namespace: str, pattern: Pattern
+    ) -> dict[str, list[Tag]]:
+        selected_tags: defaultdict[str, list[Tag]] = defaultdict(list)
+
+        resp = await self.get_namespace(name=namespace)
+        namespace_id = resp[0]["id"]
+        images = await self.get_images(namespace_id)
+        lock = Lock()
+        async with create_task_group() as tg:
+            for image in images:
+                tg.start_soon(
+                    self._task_filter_tags,
+                    lock,
+                    selected_tags,
+                    namespace,
+                    image,
+                    pattern,
+                )
+
+        return selected_tags
+
+    async def delete_tag(self, id: str) -> dict:
+        resp = await self.client.delete(f"{self.base_url}/tags/{id}")
+        logger.info(f"Deleted tag {id}")
         return resp.json()
+
+    async def bulk_delete_tag(self, ids: list[str]) -> None:
+        for batch in batched(ids, round(self._read_timout / 2)):
+            async with create_task_group() as tg:
+                for tag_id in batch:
+                    tg.start_soon(self.delete_tag, tag_id)
+
+    async def get_old_tags(
+        self,
+        namespace: str,
+        grace: timedelta | None = None,
+        keep: int | None = None,
+        pattern: Pattern | None = None,
+    ) -> dict[str, list[Tag]]:
+        selected_tags = await self.filter_namespace_tags(
+            namespace, pattern or re.compile(".*")
+        )
+        tags_to_delete: defaultdict[str, list[Tag]] = defaultdict(list)
+
+        keep_ = keep or float("-inf")
+        for image, tags in selected_tags.items():
+            tags.sort(key=lambda item: item.created_at)
+            to_delete, old_tags = [], []
+            now = datetime.now()
+            for t in tags:
+                too_old = False
+                if grace:
+                    too_old = now - t.created_at >= grace
+                if too_old:
+                    old_tags.append(t)
+                    if len(old_tags) - len(to_delete) >= keep_:
+                        to_delete.append(t)
+            tags_to_delete[image] = to_delete
+        return tags_to_delete

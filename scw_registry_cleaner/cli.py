@@ -1,12 +1,20 @@
+from __future__ import annotations
+
 import argparse
 import datetime as dt
 import logging
 import os
 import re
-from collections import defaultdict, namedtuple
-from typing import Dict, List
+from typing import TYPE_CHECKING
 
-from scw_registry_cleaner.api import RegistryAPI
+import anyio
+from anyio import create_task_group
+
+from scw_registry_cleaner.api import RegistryAPI, TagStatus
+
+if TYPE_CHECKING:
+    from typing import Pattern
+
 
 logger = logging.getLogger(__name__)
 
@@ -61,81 +69,19 @@ parser.add_argument(
     "--debug", action="store_true", help="Print responses from scaleway registry API"
 )
 
-Tag = namedtuple("Tag", ["id", "name", "created_at", "full_name"])
+TIMEDELTA_REGEX = r"((?P<hours>\d+?)hr)?((?P<minutes>\d+?)m)?((?P<seconds>\d+?)s)?"
 
 
-if __name__ == "__main__":
-    api_token = os.getenv("SCW_SECRET_KEY")
-    region = os.getenv("SCW_REGION", None)
+async def delete_old_tags(
+    api: RegistryAPI,
+    namespace: str,
+    grace: dt.timedelta | None,
+    keep: int | None = None,
+    pattern: Pattern | None = None,
+    dry_run: bool = False,
+) -> None:
 
-    # Parse args
-    args = parser.parse_args()
-    namespaces: List[str] = args.namespace[0]
-    keep = args.keep
-    grace = args.grace
-    pattern = args.pattern
-    dry_run: bool = args.dry_run
-
-    if args.scw_secret_key is not None:
-        api_token = args.scw_secret_key[0]
-
-    if args.keep is None:
-        keep = float("-inf")
-    else:
-        keep = args.keep[0]
-
-    if grace:
-        parts = re.match(
-            r"((?P<hours>\d+?)hr)?((?P<minutes>\d+?)m)?((?P<seconds>\d+?)s)?",
-            args.grace[0],
-        )
-        parts = parts.groupdict()
-        time_params = {}
-        for name, param in parts.items():
-            if param:
-                time_params[name] = int(param)
-        grace = dt.timedelta(**time_params)
-
-    if pattern is not None:
-        pattern = re.compile(pattern[0])
-
-    api = RegistryAPI(auth_token=api_token, debug=args.debug)
-
-    selected_tags: Dict[str, List[Tag]] = defaultdict(list)
-    tags_to_delete: Dict[str, List[Tag]] = defaultdict(list)
-
-    for n in namespaces:
-        resp = api.get_namespace(name=n)
-        namespace_id = resp[0]["id"]
-        images = api.get_images(namespace_id)
-        for image in images:
-            tags = api.get_image_tags(image["id"])
-            for t in tags:
-                created_at_dt = dt.datetime.fromisoformat(
-                    t["created_at"].replace("Z", "")
-                )
-                if pattern is None or pattern.match(t["name"]):
-                    tag = Tag(
-                        id=t["id"],
-                        name=t["name"],
-                        created_at=created_at_dt,
-                        full_name=f"{n}/{image['name']}:{t['name']}",
-                    )
-                    selected_tags[image["name"]].append(tag)
-
-    for image, tags in selected_tags.items():
-        tags.sort(key=lambda item: item.created_at)
-        to_delete, old_tags = [], []
-        now = dt.datetime.now()
-        for t in tags:
-            too_old = False
-            if grace:
-                too_old = now - t.created_at >= grace
-            if too_old:
-                old_tags.append(t)
-            if too_old and len(old_tags) - len(to_delete) >= keep:
-                to_delete.append(t)
-        tags_to_delete[image] = to_delete
+    tags_to_delete = await api.get_old_tags(namespace, grace, keep, pattern)
 
     if dry_run:
         print("\nTags to delete:\n")
@@ -145,9 +91,61 @@ if __name__ == "__main__":
             continue
         if dry_run:
             print(f"- {name}:\n")
-            print("\n".join(f"  {t.full_name}" for t in tags))
+            print(
+                "\n".join(f"  {t.full_name}   status: {t.status.value}" for t in tags)
+            )
             print()
         else:
-            for t in tags:
-                api.delete_tag(t.id)
-                print(f"Deleted {t.full_name}")
+            await api.bulk_delete_tag(
+                [tag.id for tag in tags if tag.status is not TagStatus.DELETING]
+            )
+
+
+async def delete_old_namesapces_tags(
+    api: RegistryAPI,
+    namespaces: list[str],
+    grace: dt.timedelta | None,
+    keep: int | None = None,
+    pattern: Pattern | None = None,
+    dry_run: bool = False,
+) -> None:
+    async with create_task_group() as tg:
+        for namespace in namespaces:
+            tg.start_soon(
+                delete_old_tags, api, namespace, grace, keep, pattern, dry_run
+            )
+
+
+if __name__ == "__main__":
+    api_token = os.getenv("SCW_SECRET_KEY")
+    region = os.getenv("SCW_REGION", None)
+
+    # Parse args
+    args = parser.parse_args()
+    namespaces: list[str] = args.namespace[0]
+    keep = args.keep
+    grace = args.grace
+    pattern = args.pattern
+    dry_run: bool = args.dry_run
+
+    if args.scw_secret_key is not None:
+        api_token = args.scw_secret_key[0]
+
+    keep = float("-inf") if args.keep is None else args.keep[0]
+
+    if grace:
+        match = re.match(TIMEDELTA_REGEX, args.grace[0])
+        if not match:
+            raise ValueError(f"Invalid duration expression {args.grace[0]}")
+        match = match.groupdict()
+        time_params = {name: int(param) for name, param in match.items() if param}
+        grace = dt.timedelta(**time_params)
+
+    if pattern is not None:
+        pattern = re.compile(pattern[0])
+
+    api = RegistryAPI(auth_token=api_token, debug=args.debug)
+
+    anyio.run(
+        delete_old_namesapces_tags, api, namespaces, grace, keep, pattern, dry_run
+    )
