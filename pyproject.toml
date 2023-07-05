@@ -24,6 +24,11 @@ version_type = "semver"
 version_provider = "poetry"
 update_changelog_on_bump = true
 major_version_zero = true
+version_files = [
+    "scw_registry_cleaner/__init__.py:__version__",
+    "pyproject.toml:^version ="
+]
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
