@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from itertools import islice
 from logging import StreamHandler
-from typing import TYPE_CHECKING, Optional, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import anyio
 from anyio import Lock, create_task_group
@@ -27,10 +27,11 @@ from httpx import (
 import scw_registry_cleaner
 
 if TYPE_CHECKING:
-    from typing import Any, Generator, Iterable, Pattern
+    from collections.abc import Generator, Iterable
+    from re import Pattern
+    from typing import Any
 
-# Prevent message "No handlers could be found for logger "scaleway"" to be
-# displayed.
+__all__ = ["RegistryAPI", "Tag", "TagStatus"]
 
 BatchedT = TypeVar("BatchedT")
 
@@ -85,8 +86,11 @@ class Tag:
     full_name: str
     status: TagStatus
 
+    def __str__(self) -> str:
+        return f"status: {self.status.value}\t{self.full_name}"
 
-class CustomTransport(AsyncHTTPTransport):
+
+class _CustomTransport(AsyncHTTPTransport):
     # Maximum number of times we try to make a request against an API in
     # maintenance before aborting.
     MAX_RETRIES = 3
@@ -120,7 +124,8 @@ class CustomTransport(AsyncHTTPTransport):
 
                 if retry >= self.MAX_RETRIES:
                     logger.error(
-                        f"API endpoint still in maintenance after {self.MAX_RETRIES} attempts. "
+                        f"API endpoint still in maintenance after"
+                        f"{self.MAX_RETRIES} attempts. "
                         f"Stop trying."
                     )
                     raise
@@ -138,7 +143,7 @@ class RegistryAPI:
     """
 
     base_url = None
-    user_agent = "scw-sdk/%s Python/%s %s" % (
+    user_agent = "scw-sdk/{} Python/{} {}".format(
         scw_registry_cleaner.__version__,
         " ".join(sys.version.split()),
         platform.platform(),
@@ -146,12 +151,12 @@ class RegistryAPI:
 
     def __init__(
         self,
-        auth_token: Optional[str] = None,
-        auth_jwt: Optional[str] = None,
-        user_agent: Optional[str] = None,
+        auth_token: str | None = None,
+        auth_jwt: str | None = None,
+        user_agent: str | None = None,
         verify_ssl: bool = True,
-        region: Optional[str] = None,
-        base_url: Optional[str] = None,
+        region: str | None = None,
+        base_url: str | None = None,
         debug: bool = False,
     ):
         if base_url:
@@ -180,7 +185,7 @@ class RegistryAPI:
     def make_client(self, logging: bool) -> AsyncClient:
         """Attaches headers needed to query Scaleway APIs."""
         client = AsyncClient(
-            mounts={"https://": CustomTransport(debug=logging)},
+            mounts={"https://": _CustomTransport(debug=logging)},
             timeout=Timeout(5.0, read=self._read_timout),
         )
 
@@ -219,13 +224,13 @@ class RegistryAPI:
                 async with lock:
                     shared_tags[image["name"]].append(tag)
 
-    async def get_namespace(self, name: Optional[str] = None) -> dict:
+    async def get_namespace(self, name: str | None = None) -> dict:
         resp = await self.client.get(
             f"{self.base_url}/namespaces", params={"name": name}
         )
         return resp.json()["namespaces"]
 
-    async def get_images(self, namespace_id: str, name: Optional[str] = None) -> dict:
+    async def get_images(self, namespace_id: str, name: str | None = None) -> dict:
         params = {"namespace_id": namespace_id}
         if name:
             params["name"] = name

@@ -1,10 +1,12 @@
+#! /sur/bin/env python
+
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import logging
 import os
 import re
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import anyio
@@ -13,7 +15,7 @@ from anyio import create_task_group
 from scw_registry_cleaner.api import RegistryAPI, TagStatus
 
 if TYPE_CHECKING:
-    from typing import Pattern
+    from re import Pattern
 
 
 logger = logging.getLogger(__name__)
@@ -50,7 +52,11 @@ parser.add_argument(
     "--grace",
     metavar="DURATION",
     nargs=1,
-    help="Delete any selected tags older than the specified duration (in hours, minutes or seconds). Valid examples: '48hr', '3600s', '24hr30m'",
+    help=(
+        "Delete any selected tags older than the specified duration"
+        " (in hours, minutes or seconds)."
+        " Valid examples: '48hr', '3600s', '24hr30m'"
+    ),
 )
 parser.add_argument(
     "-p",
@@ -58,7 +64,10 @@ parser.add_argument(
     metavar="REGEX",
     nargs=1,
     default=None,
-    help="Filter tags for that can be selected for deletion. Any tag not matching the pattern will not be deleted",
+    help=(
+        "Filter tags for that can be selected for deletion."
+        " Any tag not matching the pattern will not be deleted"
+    ),
 )
 parser.add_argument(
     "--dry-run",
@@ -75,12 +84,11 @@ TIMEDELTA_REGEX = r"((?P<hours>\d+?)hr)?((?P<minutes>\d+?)m)?((?P<seconds>\d+?)s
 async def delete_old_tags(
     api: RegistryAPI,
     namespace: str,
-    grace: dt.timedelta | None,
+    grace: timedelta | None,
     keep: int | None = None,
     pattern: Pattern | None = None,
     dry_run: bool = False,
 ) -> None:
-
     tags_to_delete = await api.get_old_tags(namespace, grace, keep, pattern)
 
     if dry_run:
@@ -91,10 +99,7 @@ async def delete_old_tags(
             continue
         if dry_run:
             print(f"- {name}:\n")
-            print(
-                "\n".join(f"  {t.full_name}   status: {t.status.value}" for t in tags)
-            )
-            print()
+            print("\n".join(f"\t{tag}" for tag in tags) + "\n")
         else:
             await api.bulk_delete_tag(
                 [tag.id for tag in tags if tag.status is not TagStatus.DELETING]
@@ -104,7 +109,7 @@ async def delete_old_tags(
 async def delete_old_namesapces_tags(
     api: RegistryAPI,
     namespaces: list[str],
-    grace: dt.timedelta | None,
+    grace: timedelta | None,
     keep: int | None = None,
     pattern: Pattern | None = None,
     dry_run: bool = False,
@@ -123,26 +128,27 @@ if __name__ == "__main__":
     # Parse args
     args = parser.parse_args()
     namespaces: list[str] = args.namespace[0]
-    keep = args.keep
-    grace = args.grace
-    pattern = args.pattern
+    keep_arg: list[int] | None = args.keep
+    grace_arg: list[str] = args.grace
+    pattern_arg: list[str] | None = args.pattern
     dry_run: bool = args.dry_run
 
     if args.scw_secret_key is not None:
         api_token = args.scw_secret_key[0]
 
-    keep = float("-inf") if args.keep is None else args.keep[0]
+    keep = float("-inf") if keep_arg is None else keep_arg[0]
+    grace, pattern = None, None
 
-    if grace:
-        match = re.match(TIMEDELTA_REGEX, args.grace[0])
+    if grace_arg:
+        match = re.match(TIMEDELTA_REGEX, grace_arg[0])
         if not match:
-            raise ValueError(f"Invalid duration expression {args.grace[0]}")
+            raise ValueError(f"Invalid duration expression {grace_arg[0]}")
         match = match.groupdict()
         time_params = {name: int(param) for name, param in match.items() if param}
-        grace = dt.timedelta(**time_params)
+        grace = timedelta(**time_params)
 
-    if pattern is not None:
-        pattern = re.compile(pattern[0])
+    if pattern_arg is not None:
+        pattern = re.compile(pattern_arg[0])
 
     api = RegistryAPI(auth_token=api_token, debug=args.debug)
 
