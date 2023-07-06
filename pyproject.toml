@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "scw-registry-cleaner"
-version = "0.1.0"
+version = "0.6.0"
 description = "Clean docker images from scaleway registry"
 authors = ["gazorby <gazorby@pm.me>"]
 license = "MIT"
