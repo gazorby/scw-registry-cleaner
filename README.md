@@ -8,7 +8,7 @@ Clean old docker images from Scaleway registry
     runs-on: ubuntu-latest
     steps:
       - name: Clean old tags
-        uses: gazorby/scw-registry-cleaner@v0.4.0
+        uses: gazorby/scw-registry-cleaner@v0.6.0
         env:
           SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
         with:
@@ -41,3 +41,7 @@ The action will print a summary of deleted image tags:
 | 254 days, 2 hours            | app/bar:main-b01899c-1666647565 |
 +------------------------------+---------------------------------+
 ```
+
+## Credits
+
+- [gcr-cleaner](https://github.com/GoogleCloudPlatform/gcr-cleaner) for inspiration
