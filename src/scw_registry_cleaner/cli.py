@@ -1,5 +1,7 @@
 #! /sur/bin/env python
 
+"""CLI interface."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import anyio
 from anyio import create_task_group
+from prettytable import PrettyTable
 
 from scw_registry_cleaner.api import RegistryAPI, TagStatus
 
@@ -27,6 +30,13 @@ parser.add_argument(
     metavar="SECRET",
     nargs=1,
     help="Scaleway secret key to authenticate the registry",
+    default=None,
+)
+parser.add_argument(
+    "--region",
+    metavar="REGION",
+    nargs=1,
+    help="Scaleway registry region",
     default=None,
 )
 parser.add_argument(
@@ -89,41 +99,79 @@ async def delete_old_tags(
     pattern: Pattern | None = None,
     dry_run: bool = False,
 ) -> None:
-    tags_to_delete = await api.get_old_tags(namespace, grace, keep, pattern)
+    """Delete namespace tag older than the specified age.
 
-    if dry_run:
-        print("\nTags to delete:\n")
+    Args:
+        api: A `RegistryAPI` instance
+        namespace: Name of the namespace in which to get tags
+        grace: Minimal age tag age. Defaults to None.
+        keep: Minimal number of tags to keep per image. Defaults to None.
+        pattern: Regex pattern that must match tag names. Defaults to None.
+        dry_run: If True, print tags that would be deleted, but don't delete them.
+            Defaults to False.
+    """
+    tags_to_delete = await api.get_old_tags(
+        namespace=namespace,
+        grace=grace,
+        keep=keep,
+        pattern=pattern,
+        exclude_statuses=[TagStatus.DELETING],
+    )
+
+    table = PrettyTable(field_names=["Age", "Image ref"], align="l")
+    tag_ids: list[str] = []
 
     for name, tags in tags_to_delete.items():
-        if not tags:
-            continue
-        if dry_run:
-            print(f"- {name}:\n")
-            print("\n".join(f"\t{tag}" for tag in tags) + "\n")
-        else:
-            await api.bulk_delete_tag(
-                [tag.id for tag in tags if tag.status is not TagStatus.DELETING]
-            )
+        table.add_row([f"{name} image", ""], divider=True)
+
+        for i, tag in enumerate(tags):
+            tag_ids.append(tag.tag_id)
+            days, hours = tag.age()
+            divider = i == len(tags) - 1
+            table.add_row([f"{days} days, {hours} hours", tag.ref], divider=divider)
+
+    if not dry_run:
+        await api.bulk_delete_tag(tag_ids)
+
+    title = "Tags that would be deleted" if dry_run else "Deleted tags"
+    print(f"\n{title}:\n")
+    print(f"{table}\n")
 
 
 async def delete_old_namesapces_tags(
-    api: RegistryAPI,
+    token: str,
     namespaces: list[str],
     grace: timedelta | None,
+    region: str | None = None,
     keep: int | None = None,
     pattern: Pattern | None = None,
     dry_run: bool = False,
+    debug: bool = False,
 ) -> None:
-    async with create_task_group() as tg:
-        for namespace in namespaces:
-            tg.start_soon(
-                delete_old_tags, api, namespace, grace, keep, pattern, dry_run
-            )
+    """Delete tags in the specified namespaces
+        older than the specified age
+
+    Args:
+        api: A `RegistryAPI` instance
+        namespaces: Namespace names in which to delete tags from
+        grace: Minimal age tag age. Defaults to None.
+        keep: Minimal number of tags to keep per image. Defaults to None.
+        pattern: Regex pattern that must match tag names. Defaults to None.
+        dry_run: If True, print tags that would be deleted, but don't delete them.
+            Defaults to False.
+    """
+    async with RegistryAPI(token=token, debug=debug, region=region) as api:
+        async with create_task_group() as task_group:
+            for namespace in namespaces:
+                task_group.start_soon(
+                    delete_old_tags, api, namespace, grace, keep, pattern, dry_run
+                )
 
 
-if __name__ == "__main__":
-    api_token = os.getenv("SCW_SECRET_KEY")
-    region = os.getenv("SCW_REGION", None)
+def main() -> None:
+    """CLI entrypoint."""
+    api_token: str | None = os.getenv("SCW_SECRET_KEY")
+    region: str | None = os.getenv("SCW_REGION")
 
     # Parse args
     args = parser.parse_args()
@@ -135,6 +183,8 @@ if __name__ == "__main__":
 
     if args.scw_secret_key is not None:
         api_token = args.scw_secret_key[0]
+    if args.region is not None:
+        region = args.region[0]
 
     keep = float("-inf") if keep_arg is None else keep_arg[0]
     grace, pattern = None, None
@@ -143,15 +193,25 @@ if __name__ == "__main__":
         match = re.match(TIMEDELTA_REGEX, grace_arg[0])
         if not match:
             raise ValueError(f"Invalid duration expression {grace_arg[0]}")
-        match = match.groupdict()
-        time_params = {name: int(param) for name, param in match.items() if param}
+        groups = match.groupdict()
+        time_params = {name: int(param) for name, param in groups.items() if param}
         grace = timedelta(**time_params)
 
     if pattern_arg is not None:
         pattern = re.compile(pattern_arg[0])
 
-    api = RegistryAPI(auth_token=api_token, debug=args.debug)
-
     anyio.run(
-        delete_old_namesapces_tags, api, namespaces, grace, keep, pattern, dry_run
+        delete_old_namesapces_tags,
+        api_token,
+        namespaces,
+        grace,
+        region,
+        keep,
+        pattern,
+        dry_run,
+        args.debug,
     )
+
+
+if __name__ == "__main__":
+    main()

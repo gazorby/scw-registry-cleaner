@@ -5,16 +5,19 @@ description = "Clean docker images from scaleway registry"
 authors = ["gazorby <gazorby@pm.me>"]
 license = "MIT"
 readme = "README.md"
-packages = [{include = "scw_registry_cleaner"}]
+packages = [{ include = "scw_registry_cleaner", from = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.11"
 httpx = "^0.24.1"
 anyio = "^3.7.0"
+prettytable = "^3.8.0"
 
 
 [tool.poetry.group.dev.dependencies]
-black = {version = "^22.10.0", allow-prereleases = true}
+black = { version = "^22.10.0", allow-prereleases = true }
+mypy = "^1.4.1"
+pylint = "^2.17.4"
 
 
 [tool.commitizen]
@@ -25,14 +28,24 @@ version_provider = "poetry"
 update_changelog_on_bump = true
 major_version_zero = true
 version_files = [
-    "scw_registry_cleaner/__init__.py:__version__",
-    "pyproject.toml:^version ="
+    "src/scw_registry_cleaner/__init__.py:__version__",
+    "pyproject.toml:^version =",
 ]
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
+
+[tool.pylint.main]
+disable = [
+    "line-too-long",
+    "no-self-argument",
+    "too-few-public-methods",
+    "too-many-arguments",
+    "too-many-locals",
+]
+enable = "useless-suppression"
 
 [tool.isort]
 profile = "black"
@@ -46,3 +59,7 @@ line_length = 88
 
 [tool.pycln]
 all = true
+
+
+[tool.codespell]
+skip = '*.po,*.ts,./src/3rdParty,./src/Test,*.lock,requirements.*.txt'

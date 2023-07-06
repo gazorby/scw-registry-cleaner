@@ -9,7 +9,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY scw_registry_cleaner scw_registry_cleaner
+COPY src/scw_registry_cleaner scw_registry_cleaner
 COPY entrypoint.sh .
 
 ENTRYPOINT [ "/app/entrypoint.sh" ]

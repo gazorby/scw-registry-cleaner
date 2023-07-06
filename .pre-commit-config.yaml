@@ -73,6 +73,14 @@ repos:
     hooks:
       - id: poetry-check
       - id: poetry-export
+        name: poetry export main
+      - id: poetry-export
+        name: poetry export dev
+        args:
+          - --format=requirements.txt
+          - --output=requirements.dev.txt
+          - --only=dev
+          - --without-hashes
 
   # Commitizen
   - repo: https://github.com/commitizen-tools/commitizen

@@ -1,5 +1,5 @@
 # scw-registry-cleaner
-Clean old docker images from scaleway registry
+Clean old docker images from Scaleway registry
 
 ## Usage
 
@@ -20,4 +20,24 @@ Clean old docker images from scaleway registry
             --grace=72hr
             # Only match tags with the following pattern
             --pattern='^main-[a-fA-F0-9]+-(?P<ts>[1-9][0-9]*)'
+```
+
+The action will print a summary of deleted image tags:
+
+```console
++------------------------------+---------------------------------+
+| Age                          | Image ref                       |
++------------------------------+---------------------------------+
+| foo image                    |                                 |
++------------------------------+---------------------------------+
+| 255 days, 5 hours            | app/foo:main-0dd8ec2-1666551916 |
+| 254 days, 2 hours            | app/foo:main-dda1dff-1666647511 |
+| 254 days, 2 hours            | app/foo:main-b01899c-1666647561 |
++------------------------------+---------------------------------+
+| bar image                    |                                 |
++------------------------------+---------------------------------+
+| 255 days, 5 hours            | app/bar:main-0dd8ec2-1666551920 |
+| 254 days, 2 hours            | app/bar:main-dda1dff-1666647516 |
+| 254 days, 2 hours            | app/bar:main-b01899c-1666647565 |
++------------------------------+---------------------------------+
 ```
